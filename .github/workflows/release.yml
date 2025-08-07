@@ -1,0 +1,58 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+jobs:
+  build-rust:
+    strategy:
+      matrix:
+        platform:
+          - name: aarch64-linux
+            target: aarch64-unknown-linux-musl
+            sdk-name: aarch64_generic-24.10.2
+          - name: amd64-linux
+            target: x86_64-unknown-linux-musl
+            sdk-name: x86-64-24.10.2
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build
+        run: cd web && npm install && npm run build
+
+      - name: Install Cross And Upx
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+          curl -L https://github.com/upx/upx/releases/download/v5.0.2/upx-5.0.2-amd64_linux.tar.xz \
+          | tar -xvJf - upx-5.0.2-amd64_linux/upx && mv upx-5.0.2-amd64_linux/upx /usr/local/bin/
+
+      - name: Build Binary
+        run: cross build --release --target ${{ matrix.platform.target }}
+
+      - name: Upx Compress And Package
+        run: |
+          upx --best --lzma target/${{ matrix.platform.target }}/release/ddns-rs
+          tar -czvf ddns-rs-${{github.ref_name}}-${{ matrix.platform.name }}.tar.gz -C target/${{ matrix.platform.target }}/release ddns-rs
+          mv target/${{ matrix.platform.target }}/release/ddns-rs .
+      - uses: openwrt/gh-action-sdk@v9
+        env:
+          ARCH: ${{ matrix.platform.sdk-name }}
+          PACKAGES: ddns-rs
+          NO_DEFAULT_FEEDS: true
+          V: sc
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ddns-rs-*.tar.gz
+            bin/packages/*/action/*.ipk
+          tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: true
